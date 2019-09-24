@@ -1,0 +1,194 @@
+---
+title: "DATA 621 – Business Analytics and Data Mining Homework 1"
+author: '...'
+date: "15/09/2019"
+output:
+  word_document: 
+              fig_width: 14
+              fig_height: 10
+  pdf_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, message = FALSE,warning = FALSE)
+
+```
+
+Load the libraries
+
+```{r}
+library(ggcorrplot)
+library(pander)
+library(tidyverse)
+library(PerformanceAnalytics)
+library(Amelia)
+library(caret)
+library(mice)
+```
+
+read the data
+```{r}
+training <- read_csv("moneyball-training-data.csv" )
+training <- training[,2:ncol(training)]
+evaluation <- read_csv("moneyball-evaluation-data.csv")
+colId <- evaluation$INDEX
+evaluation <- evaluation[,2:ncol(evaluation)]
+```
+
+# 1. DATA EXPLORATION (25 Points)
+
+Describe the size and the variables in the moneyball training data set. Consider that too much detail will cause a manager to lose interest while too little detail will make the manager consider that you aren’t doing your job. Some suggestions are given below. Please do NOT treat this as a check list of things to do to complete the assignment. You should have your own thoughts on what to tell the boss. These are just ideas.
+a. Mean / Standard Deviation / Median
+b. Bar Chart or Box Plot of the data
+c. Is the data correlated to the target variable (or to other variables?)
+d. Are any of the variables missing and need to be imputed “fixed”?
+
+```{r}
+glimpse(training)
+```
+
+Summary Statistics
+```{r}
+pander(summary(training), split.table=120)
+```
+Box plot of the data
+
+```{r}
+for(col in colnames(training)){
+  boxplot(training[,col],ylab = col)
+}
+
+```
+
+```{r}
+chart.Correlation(training)
+```
+
+```{r}
+missmap(training)
+```
+```{r}
+corr <- cor(training, use="complete.ob")
+ggcorrplot(corr, hc.order = TRUE, type = "lower",
+   lab = TRUE)
+```
+
+# 2. DATA PREPARATION (25 Points)
+Describe how you have transformed the data by changing the original variables or creating new variables. If you did transform the data or create new variables, discuss why you did this. Here are some possible transformations.
+a. Fix missing values (maybe with a Mean or Median value)'
+```{r}
+imputed_Data <- mice(training, m=1, maxit = 50, method = 'pmm', seed = 500)
+complete_data <- complete(imputed_Data,1)
+
+imputed_Data_eval <- mice(evaluation, m=1, maxit = 50, method = 'pmm', seed = 500)
+complete_data_evaluation <- complete(imputed_Data_eval,1)
+```
+
+
+b. Create flags to suggest if a variable was missing
+```{r}
+training$flag <- 0
+training$flag[rowMeans(training) > 0] <- 1
+table(training$flag)
+```
+
+c. Transform data by putting it into buckets
+```{r}
+# TEAM_BATTING_H 0-1200,1200-2000,2000-3000
+b <- c(-Inf, 1200, 2000, Inf)
+names <- c("Low", "Medium", "High")
+complete_data$TEAM_BATTING_H.cat <- cut(complete_data$TEAM_BATTING_H, breaks = b, labels = names)
+complete_data_evaluation$TEAM_BATTING_H.cat <- cut(complete_data_evaluation$TEAM_BATTING_H, breaks = b, labels = names)
+
+
+```
+
+
+
+d. Combine variables (such as ratios or adding or multiplying) to create new variables
+```{r}
+complete_data$stolen <- complete_data$TEAM_BASERUN_CS + complete_data$TEAM_BASERUN_SB
+complete_data_evaluation$stolen <- complete_data_evaluation$TEAM_BASERUN_CS + complete_data_evaluation$TEAM_BASERUN_SB
+```
+```{r}
+# drop TEAM_BATTING_H
+complete_data <- complete_data %>% 
+  select(-TEAM_BATTING_H,-TEAM_BASERUN_CS, -TEAM_BASERUN_SB)
+# drop TEAM_BATTING_H
+evaluation <- evaluation %>% 
+  select(-TEAM_BATTING_H,-TEAM_BASERUN_CS, -TEAM_BASERUN_SB)
+```
+
+
+3. BUILD MODELS (25 Points)
+Using the training data set, build at least three different multiple linear regression models, using different variables (or the same variables with different transformations). Since we have not yet covered automated variable selection methods, you should select the variables manually (unless you previously learned Forward or Stepwise selection, etc.). Since you manually selected a variable for inclusion into the model or exclusion into the model, indicate why this was done.
+Discuss the coefficients in the models, do they make sense? For example, if a team hits a lot of Home Runs, it would be reasonably expected that such a team would win more games. However, if the coefficient is negative (suggesting that the team would lose more games), then that needs to be discussed. Are you keeping the model even though it is counter intuitive? Why? The boss needs to know.
+
+Model 1 with all the variables
+```{r}
+model1 <- lm(TARGET_WINS~., data = complete_data)
+pander(summary(model1))
+```
+
+Model 2 dropping non significant variable
+```{r}
+model2 <- lm(TARGET_WINS~.-TEAM_PITCHING_HR-TEAM_PITCHING_BB-TEAM_PITCHING_SO, data = complete_data)
+pander(summary(model2))
+```
+
+Model with highly correlated variables
+```{r}
+model3 <- lm(TARGET_WINS~TEAM_BATTING_H.cat+TEAM_BATTING_2B +TEAM_BATTING_HR + TEAM_BATTING_BB+
+              TEAM_PITCHING_H+TEAM_PITCHING_HR, data = complete_data )
+pander(summary(model3))
+```
+
+4. SELECT MODELS (25 Points)
+Decide on the criteria for selecting the best multiple linear regression model. Will you select a model with slightly worse performance if it makes more sense or is more parsimonious? Discuss why you selected your model.
+For the multiple linear regression model, will you use a metric such as Adjusted R2, RMSE, etc.? Be sure to explain how you can make inferences from the model, discuss multi-collinearity issues (if any), and discuss other relevant model output. Using the training data set, evaluate the multiple linear regression model based on 
+(a) mean squared error
+```{r}
+mse <- numeric(3)
+mse[[1]] <- mean((complete_data$TARGET_WINS - predict(model1))^2)
+mse[[2]] <- mean((complete_data$TARGET_WINS - predict(model2))^2)
+mse[[3]] <- mean((complete_data$TARGET_WINS - predict(model3))^2)
+mse
+```
+
+(b) R2
+```{r}
+ summary(model1)$adj.r.squared
+ summary(model2)$adj.r.squared
+ summary(model3)$adj.r.squared
+```
+
+(c) F-statistic
+```{r}
+ summary(model1)$fstatistic
+ summary(model2)$fstatistic
+ summary(model3)$fstatistic
+```
+
+and (d) residual plots.
+
+```{r}
+par(mfrow=c(2,2))
+plot(model1)
+par(mfrow=c(2,2))
+plot(model2)
+par(mfrow=c(2,2))
+plot(model3)
+```
+
+ Make predictions using the evaluation data set.
+ 
+```{r}
+complete_data_evaluation$PredictedWins <- predict(model2, complete_data_evaluation)
+complete_data_evaluation$PredictedWins
+```
+```{r}
+df <- data.frame("Index"=colId,"Predicted wins"= complete_data_evaluation$PredictedWins)
+write.csv(df,"predictions.csv")
+```
+ 
+ 
